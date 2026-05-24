@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Three.js Gravity Playground</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; background: #030712; }
+      #hud {
+        position: fixed; top: 12px; left: 12px; z-index: 10;
+        background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.2); border-radius: 12px;
+        padding: 10px 12px; color: #e5e7eb; font-size: 14px; line-height: 1.5;
+      }
+      #hud b { color: #93c5fd; }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <div><b>3D Gravity Playground</b></div>
+      <div>Drag: rotate camera</div>
+      <div>Wheel: zoom</div>
+      <div>Space: random impulse</div>
+      <div>R: reset simulation</div>
+    </div>
+    <script type="module">
+      import * as THREE from 'https://unpkg.com/three@0.165.0/build/three.module.js';
+      import { OrbitControls } from 'https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js';
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x030712);
+      scene.fog = new THREE.Fog(0x030712, 25, 90);
+
+      const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 200);
+      camera.position.set(14, 10, 18);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.target.set(0, 2, 0);
+
+      scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x0f172a, 0.55));
+      const dir = new THREE.DirectionalLight(0xffffff, 1.2);
+      dir.position.set(12, 20, 8);
+      dir.castShadow = true;
+      dir.shadow.mapSize.set(2048, 2048);
+      scene.add(dir);
+
+      const floor = new THREE.Mesh(
+        new THREE.CircleGeometry(22, 96),
+        new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.95, metalness: 0.05 })
+      );
+      floor.rotation.x = -Math.PI / 2;
+      floor.receiveShadow = true;
+      scene.add(floor);
+
+      const grid = new THREE.GridHelper(44, 44, 0x1d4ed8, 0x1e293b);
+      grid.position.y = 0.01;
+      scene.add(grid);
+
+      const balls = [];
+      const BALL_COUNT = 28;
+      const radius = 0.65;
+      const gravity = new THREE.Vector3(0, -14, 0);
+      const bounds = 10.5;
+
+      const makeBall = (i) => {
+        const hue = (i / BALL_COUNT) * 0.8 + Math.random() * 0.08;
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(radius, 24, 24),
+          new THREE.MeshStandardMaterial({
+            color: new THREE.Color().setHSL(hue, 0.72, 0.58),
+            roughness: 0.35,
+            metalness: 0.18,
+            emissive: 0x0b1220,
+            emissiveIntensity: 0.22,
+          })
+        );
+        mesh.castShadow = true;
+        scene.add(mesh);
+
+        return {
+          mesh,
+          velocity: new THREE.Vector3((Math.random()-0.5)*5, Math.random()*2, (Math.random()-0.5)*5),
+          mass: 0.8 + Math.random() * 1.2,
+        };
+      };
+
+      const reset = () => {
+        balls.length = 0;
+        scene.children.filter(o => o.userData.ball).forEach(o => scene.remove(o));
+        for (let i = 0; i < BALL_COUNT; i++) {
+          const ball = makeBall(i);
+          ball.mesh.userData.ball = true;
+          ball.mesh.position.set((Math.random()-0.5)*7, 4 + Math.random()*10, (Math.random()-0.5)*7);
+          balls.push(ball);
+        }
+      };
+
+      reset();
+
+      const clock = new THREE.Clock();
+
+      const resolveCollision = (a, b) => {
+        const delta = new THREE.Vector3().subVectors(b.mesh.position, a.mesh.position);
+        const dist = delta.length();
+        const minDist = radius * 2;
+        if (dist === 0 || dist >= minDist) return;
+
+        const normal = delta.normalize();
+        const overlap = minDist - dist;
+        a.mesh.position.addScaledVector(normal, -overlap * 0.5);
+        b.mesh.position.addScaledVector(normal, overlap * 0.5);
+
+        const relative = new THREE.Vector3().subVectors(a.velocity, b.velocity);
+        const sepVel = relative.dot(normal);
+        if (sepVel > 0) return;
+
+        const restitution = 0.86;
+        const impulseMag = -(1 + restitution) * sepVel / (1 / a.mass + 1 / b.mass);
+        const impulse = normal.clone().multiplyScalar(impulseMag);
+        a.velocity.addScaledVector(impulse, 1 / a.mass);
+        b.velocity.addScaledVector(impulse, -1 / b.mass);
+      };
+
+      addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+          for (const ball of balls) {
+            ball.velocity.add(new THREE.Vector3((Math.random()-0.5)*12, Math.random()*8, (Math.random()-0.5)*12));
+          }
+        } else if (e.key.toLowerCase() === 'r') {
+          reset();
+        }
+      });
+
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      function tick() {
+        const dt = Math.min(clock.getDelta(), 0.025);
+
+        for (const ball of balls) {
+          ball.velocity.addScaledVector(gravity, dt);
+          ball.mesh.position.addScaledVector(ball.velocity, dt);
+
+          if (ball.mesh.position.y - radius < 0) {
+            ball.mesh.position.y = radius;
+            ball.velocity.y *= -0.82;
+            ball.velocity.x *= 0.98;
+            ball.velocity.z *= 0.98;
+          }
+
+          for (const axis of ['x', 'z']) {
+            if (Math.abs(ball.mesh.position[axis]) + radius > bounds) {
+              ball.mesh.position[axis] = Math.sign(ball.mesh.position[axis]) * (bounds - radius);
+              ball.velocity[axis] *= -0.82;
+            }
+          }
+        }
+
+        for (let i = 0; i < balls.length; i++) {
+          for (let j = i + 1; j < balls.length; j++) resolveCollision(balls[i], balls[j]);
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
+      }
+
+      tick();
+    </script>
+  </body>
+</html>
